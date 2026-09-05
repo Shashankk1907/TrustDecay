@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite runtime database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Pytest / Testing
+.pytest_cache/
+
+# Ignore all markdown documentation
+*.md
+
+# OS artifacts
+.DS_Store

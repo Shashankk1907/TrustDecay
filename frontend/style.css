@@ -1,0 +1,8 @@
+/* TrustDecay basic styles */
+body {
+  margin: 0;
+  padding: 1.5rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #0d1117;
+  color: #c9d1d9;
+}
