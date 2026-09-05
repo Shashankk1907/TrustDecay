@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.db import init_db, get_db
 from backend.models import HealthResponse
+from backend.routes.trust import router as trust_router
+from backend.routes.nodes import router as nodes_router
+from backend.routes.views import router as views_router
 
 
 @asynccontextmanager
@@ -32,6 +35,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include API routers
+app.include_router(trust_router)
+app.include_router(nodes_router)
+app.include_router(views_router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["health"])

@@ -1,4 +1,22 @@
-"""Trust management routes (to be implemented in Phase 2 & 3)."""
-from fastapi import APIRouter
+"""Trust management API routes."""
+
+from fastapi import APIRouter, HTTPException
+from backend.db import get_db
+from backend.models import CreateTrustRequest, GrantTrustRequest, TrustRelationship
+from backend.authority import create_trust_relationship, grant_trust
 
 router = APIRouter(prefix="/trust", tags=["trust"])
+
+
+@router.post("", response_model=TrustRelationship)
+def create_trust(req: CreateTrustRequest) -> TrustRelationship:
+    """Create a new canonical trust relationship at the authority level."""
+    with get_db() as conn:
+        return create_trust_relationship(conn, req.relationship_id)
+
+
+@router.post("/{relationship_id}/grant")
+def grant_node_trust(relationship_id: str, req: GrantTrustRequest) -> dict:
+    """Authority grants a trust relationship directly to a node."""
+    with get_db() as conn:
+        return grant_trust(conn, relationship_id, req.node_id)

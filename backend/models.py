@@ -80,3 +80,24 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str = "ok"
     database: str = "connected"
+
+
+class CreateTrustRequest(BaseModel):
+    """Request payload for POST /trust."""
+    relationship_id: str
+
+
+class GrantTrustRequest(BaseModel):
+    """Request payload for POST /trust/{id}/grant."""
+    node_id: str
+
+
+class PropagateTrustRequest(BaseModel):
+    """Request payload for POST /nodes/{node_id}/propagate."""
+    relationship_id: str
+    to_node: str
+
+
+class DemoResetResponse(BaseModel):
+    """Response payload for POST /demo/reset."""
+    status: str = "reset complete"

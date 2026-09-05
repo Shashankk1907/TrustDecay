@@ -4,7 +4,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "trustdecay.db"
 
@@ -96,3 +96,21 @@ def init_db(db_path: str | Path | None = None) -> None:
     """Idempotently initialize all required SQLite tables."""
     with get_db(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+
+
+def log_event(conn: sqlite3.Connection, message: str, ts: Optional[str] = None) -> None:
+    """Record an append-only event into the event_log table with an ISO timestamp."""
+    from datetime import datetime, timezone
+    event_ts = ts if ts is not None else datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT INTO event_log (ts, message) VALUES (?, ?);", (event_ts, message))
+
+
+def wipe_db(conn: sqlite3.Connection) -> None:
+    """Wipe all data from the database tables for clean deterministic resets."""
+    conn.execute("DELETE FROM propagation_edge;")
+    conn.execute("DELETE FROM node_trust;")
+    conn.execute("DELETE FROM node_state;")
+    conn.execute("DELETE FROM trust_relationship;")
+    conn.execute("DELETE FROM authority_state;")
+    conn.execute("DELETE FROM event_log;")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('propagation_edge', 'event_log');")
