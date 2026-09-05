@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import HTTPException
 from backend.db import log_event
 from backend.models import NodeTrust, NodeTrustStatus, NodeState, ConnectivityState, LifecycleState
+from backend.authority import get_trust_relationship
 
 
 def get_node_trust(conn: sqlite3.Connection, node_id: str, relationship_id: str) -> Optional[NodeTrust]:
@@ -162,4 +163,94 @@ def propagate_trust(
         "from_node": source_node,
         "to_node": destination_node,
         "epoch": source_trust.epoch,
+    }
+
+
+def authorize(conn: sqlite3.Connection, node_id: str, relationship_id: str) -> dict:
+    """Authorize a node for a given relationship per architecture.md §10 pseudocode.
+
+    Decision chain (fail-safe — every step defaults to DENY):
+    1. Load node state — 404 if node unknown.
+    2. I6: If lifecycle == RECONCILING, DENY (fail-closed gate).
+    3. Load node_trust — DENY if node doesn't hold this relationship.
+    4. Load authoritative trust_relationship — DENY if relationship unknown.
+    5. If local status != TRUSTED, DENY (locally blocked).
+    6. I2: If local epoch < authoritative epoch, DENY (stale epoch).
+    7. Otherwise ALLOW.
+
+    All queries scoped by relationship_id (I7 — entity isolation).
+    """
+    # Step 1: Load node state
+    node = get_node_state(conn, node_id)
+    if node is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Node '{node_id}' not found",
+        )
+
+    # I6: Fail-closed gate — RECONCILING node denies ALL authorization
+    if node.lifecycle == LifecycleState.RECONCILING:  # I6
+        log_event(conn, f"Authorize DENY: node '{node_id}' is RECONCILING for '{relationship_id}'")
+        return {
+            "decision": "DENY",
+            "node_id": node_id,
+            "relationship_id": relationship_id,
+            "reason": "node is reconciling",
+        }
+
+    # Step 3: Load node_trust (I7 — scoped by relationship_id)
+    nt = get_node_trust(conn, node_id, relationship_id)
+    if nt is None:
+        log_event(conn, f"Authorize DENY: node '{node_id}' has no trust for '{relationship_id}'")
+        return {
+            "decision": "DENY",
+            "node_id": node_id,
+            "relationship_id": relationship_id,
+            "reason": "no trust relationship held",
+        }
+
+    # Step 4: Load authoritative relationship
+    rel = get_trust_relationship(conn, relationship_id)
+    if rel is None:
+        log_event(conn, f"Authorize DENY: trust relationship '{relationship_id}' not found")
+        return {
+            "decision": "DENY",
+            "node_id": node_id,
+            "relationship_id": relationship_id,
+            "reason": "trust relationship not found at authority",
+        }
+
+    # Step 5: If local status is not TRUSTED, deny
+    if nt.status != NodeTrustStatus.TRUSTED:
+        log_event(
+            conn,
+            f"Authorize DENY: node '{node_id}' is locally {nt.status.value} for '{relationship_id}'",
+        )
+        return {
+            "decision": "DENY",
+            "node_id": node_id,
+            "relationship_id": relationship_id,
+            "reason": "locally blocked",
+        }
+
+    # I2: Revocation dominance — stale epoch means cached trust is invalid
+    if nt.epoch < rel.epoch:  # I2
+        log_event(
+            conn,
+            f"Authorize DENY: node '{node_id}' has stale epoch {nt.epoch} < {rel.epoch} for '{relationship_id}'",
+        )
+        return {
+            "decision": "DENY",
+            "node_id": node_id,
+            "relationship_id": relationship_id,
+            "reason": "stale epoch",
+        }
+
+    # Step 7: All checks passed — ALLOW
+    log_event(conn, f"Authorize ALLOW: node '{node_id}' for '{relationship_id}'")
+    return {
+        "decision": "ALLOW",
+        "node_id": node_id,
+        "relationship_id": relationship_id,
+        "reason": "",
     }
