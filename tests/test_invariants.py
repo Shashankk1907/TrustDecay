@@ -704,11 +704,116 @@ def test_unrelated_trust_untouched(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Phase 8 test: indirect footprint found — covered partially by Phase 3 tests")
+@pytest.mark.skip(reason="Phase 8 test: indirect footprint found — covered fully by test_footprint_bfs_direct_and_indirect")
 def test_indirect_footprint_found():
     pass
 
 
-@pytest.mark.skip(reason="Phase 8 test: offline then reconnect deny — requires Phase 5 reconnect endpoint")
-def test_offline_then_reconnect_deny():
-    pass
+def test_offline_then_reconnect_deny(tmp_path, monkeypatch):
+    """§12 Required: D offline holding alice, revoke, reconnect D -> D authorize(alice) = DENY.
+
+    Manual sequence from phase 5 spec:
+    1. D holds Alice (via seed graph).
+    2. Disconnect D.
+    3. Revoke Alice.
+    4. Confirm D's cache remains TRUSTED (frozen) while offline.
+    5. Reconnect D.
+    6. Confirm lifecycle becomes RECONCILING before READY (fail-closed).
+    7. Confirm authorization cannot ALLOW during reconciliation.
+    8. After reconciliation, D is BLOCKED.
+    9. Authorization remains DENY.
+    """
+    db_file = tmp_path / "phase5_reconnect_deny.db"
+    monkeypatch.setenv("DATABASE_PATH", str(db_file))
+    init_db(db_file)
+
+    client = TestClient(app)
+    client.post("/demo/reset")
+
+    # Step 1: Verify D holds alice as TRUSTED in seed graph
+    conn = get_db_connection(db_file)
+    d_trust = conn.execute(
+        "SELECT status, epoch FROM node_trust WHERE node_id = 'D' AND relationship_id = 'alice';"
+    ).fetchone()
+    assert d_trust is not None
+    assert d_trust["status"] == "TRUSTED"
+    assert d_trust["epoch"] == 1
+    conn.close()
+
+    # Step 2: Disconnect D
+    res = client.post("/nodes/D/disconnect")
+    assert res.status_code == 200
+    assert res.json()["connectivity"] == "OFFLINE"
+
+    # Step 3: Revoke Alice
+    res = client.post("/trust/alice/revoke")
+    assert res.status_code == 200
+    assert res.json()["status"] == "REVOKED"
+    # D must be in skipped_offline_nodes
+    assert "D" in res.json()["skipped_offline_nodes"]
+    assert "D" not in res.json()["blocked_nodes"]
+
+    # Step 4: Confirm D's cache is STILL TRUSTED (frozen) while offline
+    conn = get_db_connection(db_file)
+    d_trust_frozen = conn.execute(
+        "SELECT status, epoch FROM node_trust WHERE node_id = 'D' AND relationship_id = 'alice';"
+    ).fetchone()
+    assert d_trust_frozen["status"] == "TRUSTED", (
+        f"D's cache should remain TRUSTED while offline, got {d_trust_frozen['status']}"
+    )
+    assert d_trust_frozen["epoch"] == 1, (
+        f"D's cache epoch should remain 1 while offline, got {d_trust_frozen['epoch']}"
+    )
+    conn.close()
+
+    # Step 5+6+7: Reconnect D — inside reconnect_node(), lifecycle becomes RECONCILING
+    # before reconcile() runs and before READY is set.
+    # We validate the end state here (we can't intercept mid-reconciliation in unit test).
+    # The critical invariant: reconcile() MUST set RECONCILING first (checked in node.py).
+    # To test fail-closed during RECONCILING, we manually set RECONCILING and call authorize.
+
+    # First: manually set D to RECONCILING (simulating mid-reconnect) and test I6
+    conn = get_db_connection(db_file)
+    conn.execute("UPDATE node_state SET connectivity = 'ONLINE', lifecycle = 'RECONCILING' WHERE node_id = 'D';")
+    conn.commit()
+    conn.close()
+
+    # D is RECONCILING — authorize must DENY (I6 fail-closed gate)
+    res_reconciling = client.post("/nodes/D/authorize", json={"relationship_id": "alice"})
+    assert res_reconciling.status_code == 403, (
+        f"RECONCILING D must DENY, got {res_reconciling.status_code}"
+    )
+    assert res_reconciling.json()["decision"] == "DENY"
+    assert "reconciling" in res_reconciling.json()["reason"]
+
+    # Step 5: Now actually reconnect D via the endpoint (reset to OFFLINE first)
+    conn = get_db_connection(db_file)
+    conn.execute("UPDATE node_state SET connectivity = 'OFFLINE', lifecycle = 'READY' WHERE node_id = 'D';")
+    conn.commit()
+    conn.close()
+
+    res = client.post("/nodes/D/reconnect")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["connectivity"] == "ONLINE"
+    assert data["lifecycle"] == "READY"
+
+    # Step 8: After reconciliation, D must be BLOCKED for alice (authority epoch advanced)
+    conn = get_db_connection(db_file)
+    d_trust_after = conn.execute(
+        "SELECT status, epoch FROM node_trust WHERE node_id = 'D' AND relationship_id = 'alice';"
+    ).fetchone()
+    assert d_trust_after["status"] == "BLOCKED", (
+        f"D should be BLOCKED after reconciliation, got {d_trust_after['status']}"
+    )
+    assert d_trust_after["epoch"] == 2, (
+        f"D's epoch should be 2 after reconciliation, got {d_trust_after['epoch']}"
+    )
+    conn.close()
+
+    # Step 9: Authorization must remain DENY for D on alice
+    res_final = client.post("/nodes/D/authorize", json={"relationship_id": "alice"})
+    assert res_final.status_code == 403, (
+        f"D must DENY alice after reconciliation, got {res_final.status_code}"
+    )
+    assert res_final.json()["decision"] == "DENY"

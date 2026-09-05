@@ -132,3 +132,81 @@ class AuthorizeResponse(BaseModel):
     node_id: str
     relationship_id: str
     reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Disconnect / Reconnect responses
+# ---------------------------------------------------------------------------
+
+
+class DisconnectResponse(BaseModel):
+    """Response payload for POST /nodes/{node_id}/disconnect."""
+    node_id: str
+    connectivity: str  # "OFFLINE"
+
+
+class ReconnectResponse(BaseModel):
+    """Response payload for POST /nodes/{node_id}/reconnect."""
+    node_id: str
+    connectivity: str  # "ONLINE"
+    lifecycle: str     # "READY" (after reconciliation)
+    reconciled_relationships: int
+    last_reconciled_epoch: int
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Graph / Events / Convergence responses
+# ---------------------------------------------------------------------------
+
+
+class GraphNodeTrust(BaseModel):
+    """One node_trust entry embedded in a graph node."""
+    relationship_id: str
+    status: str
+    epoch: int
+    source_node: str
+
+
+class GraphNodeEntry(BaseModel):
+    """One node's full state in the GET /graph response."""
+    node_id: str
+    connectivity: str
+    lifecycle: str
+    last_reconciled_epoch: int
+    trust: list[GraphNodeTrust] = Field(default_factory=list)
+
+
+class GraphResponse(BaseModel):
+    """Response payload for GET /graph."""
+    nodes: list[GraphNodeEntry]
+
+
+class EventLogEntry(BaseModel):
+    """One event_log row in the GET /events response."""
+    id: int
+    ts: str
+    message: str
+
+
+class EventsResponse(BaseModel):
+    """Response payload for GET /events."""
+    events: list[EventLogEntry]
+
+
+class ConvergenceNodeEntry(BaseModel):
+    """Per-node convergence comparison for GET /convergence."""
+    node_id: str
+    local_epoch: Optional[int]
+    local_status: Optional[str]
+    authority_epoch: int
+    authority_status: str
+    converged: bool
+
+
+class ConvergenceResponse(BaseModel):
+    """Response payload for GET /convergence."""
+    relationship_id: str
+    authority_epoch: int
+    authority_status: str
+    all_converged: bool
+    nodes: list[ConvergenceNodeEntry]

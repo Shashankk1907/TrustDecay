@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Response
 from backend.db import get_db
 from backend.models import PropagateTrustRequest, AuthorizeRequest, AuthorizeResponse
-from backend.node import propagate_trust, authorize
+from backend.node import propagate_trust, authorize, disconnect_node, reconnect_node
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -34,3 +34,27 @@ def authorize_node(node_id: str, req: AuthorizeRequest, response: Response) -> A
         response.status_code = 403
 
     return AuthorizeResponse(**result)
+
+
+@router.post("/{node_id}/disconnect")
+def disconnect(node_id: str) -> dict:
+    """Disconnect a node — sets connectivity=OFFLINE. node_trust cache is frozen (untouched).
+
+    Per architecture.md §9 and §7:
+        disconnect() → connectivity = OFFLINE (node_trust untouched)
+    """
+    with get_db() as conn:
+        return disconnect_node(conn, node_id)
+
+
+@router.post("/{node_id}/reconnect")
+def reconnect(node_id: str) -> dict:
+    """Reconnect an offline node via the exact fail-closed path:
+    OFFLINE → ONLINE+RECONCILING → reconcile() → READY.
+
+    Per architecture.md §7 hard rule:
+        Never OFFLINE → READY → reconcile.
+        Always OFFLINE → RECONCILING → READY.
+    """
+    with get_db() as conn:
+        return reconnect_node(conn, node_id)

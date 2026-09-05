@@ -166,6 +166,139 @@ def propagate_trust(
     }
 
 
+def disconnect_node(conn: sqlite3.Connection, node_id: str) -> dict:
+    """Set node connectivity to OFFLINE. node_trust cache is NOT modified (frozen).
+
+    Per architecture.md §7:
+        disconnect() → connectivity = OFFLINE (node_trust untouched, frozen)
+    """
+    node = get_node_state(conn, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
+
+    conn.execute(
+        "UPDATE node_state SET connectivity = ? WHERE node_id = ?;",
+        (ConnectivityState.OFFLINE.value, node_id),
+    )
+    log_event(conn, f"Node '{node_id}' disconnected (went OFFLINE)")
+    return {"node_id": node_id, "connectivity": ConnectivityState.OFFLINE.value}
+
+
+def reconcile(conn: sqlite3.Connection, node_id: str) -> dict:
+    """Reconcile a node's local trust cache against the authority.
+
+    Per architecture.md §10 and phase 5 spec:
+
+    1. Set lifecycle = RECONCILING immediately (fail-closed gate is now active).
+    2. For every relationship held by the node:
+           if authority.epoch > local.epoch:  # I4
+               overwrite local status and epoch
+    3. Set lifecycle = READY only after reconciliation completes.
+    4. Update last_reconciled_epoch.
+    5. Log the reconciliation event.
+
+    Hard rule: NEVER set READY before reconciliation completes (I4 / §7).
+    This function is used both on reconnect AND on process startup.
+    """
+    node = get_node_state(conn, node_id)
+    if node is None:
+        # On startup, nodes may not have a row yet — skip gracefully
+        return {"node_id": node_id, "reconciled_relationships": 0}
+
+    # Step 1: Set lifecycle = RECONCILING immediately — fail-closed gate active # I6
+    conn.execute(
+        "UPDATE node_state SET lifecycle = ? WHERE node_id = ?;",
+        (LifecycleState.RECONCILING.value, node_id),
+    )
+
+    # Step 2: Load all trust rows for this node (I7 — each scoped by relationship_id)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT relationship_id, status, epoch FROM node_trust WHERE node_id = ?;",
+        (node_id,),
+    )
+    trust_rows = cursor.fetchall()
+
+    reconciled_count = 0
+    for row in trust_rows:
+        rel_id = row["relationship_id"]
+        local_epoch = row["epoch"]
+
+        rel = get_trust_relationship(conn, rel_id)
+        if rel is None:
+            # Relationship no longer exists at authority — skip
+            continue
+
+        # I4 Reconcile dominance: overwrite only when authority epoch is newer
+        if rel.epoch > local_epoch:  # I4
+            new_status = (
+                NodeTrustStatus.BLOCKED.value
+                if rel.status.value == "REVOKED"
+                else NodeTrustStatus.TRUSTED.value
+            )
+            conn.execute(
+                """
+                UPDATE node_trust SET status = ?, epoch = ?
+                WHERE node_id = ? AND relationship_id = ?;
+                """,
+                (new_status, rel.epoch, node_id, rel_id),
+            )
+            reconciled_count += 1
+
+    # Step 3: Read the current authority global epoch for last_reconciled_epoch
+    epoch_row = conn.execute(
+        "SELECT global_epoch FROM authority_state WHERE id = 1;"
+    ).fetchone()
+    current_epoch = epoch_row["global_epoch"] if epoch_row is not None else 0
+
+    # Step 4: Set lifecycle = READY and update last_reconciled_epoch
+    conn.execute(
+        "UPDATE node_state SET lifecycle = ?, last_reconciled_epoch = ? WHERE node_id = ?;",
+        (LifecycleState.READY.value, current_epoch, node_id),
+    )
+
+    # Step 5: Log event
+    log_event(conn, f"Node '{node_id}' reconciled to epoch {current_epoch}")
+
+    return {
+        "node_id": node_id,
+        "reconciled_relationships": reconciled_count,
+        "last_reconciled_epoch": current_epoch,
+    }
+
+
+def reconnect_node(conn: sqlite3.Connection, node_id: str) -> dict:
+    """Reconnect a node: OFFLINE → ONLINE+RECONCILING → reconcile() → READY.
+
+    Per architecture.md §7 transition rule:
+        reconnect() → connectivity = ONLINE, lifecycle = RECONCILING
+                    → [reconcile algorithm]
+                    → lifecycle = READY
+
+    Hard rule: Never OFFLINE → READY → reconcile. Always OFFLINE → RECONCILING → READY.
+    """
+    node = get_node_state(conn, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
+
+    # Set connectivity = ONLINE first, lifecycle transition is handled inside reconcile()
+    conn.execute(
+        "UPDATE node_state SET connectivity = ? WHERE node_id = ?;",
+        (ConnectivityState.ONLINE.value, node_id),
+    )
+    log_event(conn, f"Node '{node_id}' reconnected (back ONLINE, entering RECONCILING)")
+
+    # reconcile() sets RECONCILING → does work → sets READY
+    result = reconcile(conn, node_id)
+
+    return {
+        "node_id": node_id,
+        "connectivity": ConnectivityState.ONLINE.value,
+        "lifecycle": LifecycleState.READY.value,
+        **result,
+    }
+
+
 def authorize(conn: sqlite3.Connection, node_id: str, relationship_id: str) -> dict:
     """Authorize a node for a given relationship per architecture.md §10 pseudocode.
 
