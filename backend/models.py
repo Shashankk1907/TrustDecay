@@ -101,3 +101,34 @@ class PropagateTrustRequest(BaseModel):
 class DemoResetResponse(BaseModel):
     """Response payload for POST /demo/reset."""
     status: str = "reset complete"
+
+
+class FootprintResponse(BaseModel):
+    """Response payload for GET /footprint/{relationship_id}."""
+    relationship_id: str
+    direct: list[str]
+    indirect: list[str]
+
+
+class RevokeResponse(BaseModel):
+    """Response payload for POST /trust/{id}/revoke."""
+    relationship_id: str
+    status: str
+    epoch: int
+    footprint_direct: list[str] = Field(default_factory=list)
+    footprint_indirect: list[str] = Field(default_factory=list)
+    blocked_nodes: list[str] = Field(default_factory=list)
+    skipped_offline_nodes: list[str] = Field(default_factory=list)
+
+
+class AuthorizeRequest(BaseModel):
+    """Request payload for POST /nodes/{node_id}/authorize."""
+    relationship_id: str
+
+
+class AuthorizeResponse(BaseModel):
+    """Response payload for POST /nodes/{node_id}/authorize."""
+    decision: str  # "ALLOW" or "DENY"
+    node_id: str
+    relationship_id: str
+    reason: str = ""
