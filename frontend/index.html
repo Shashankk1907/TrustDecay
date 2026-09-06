@@ -3,17 +3,203 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TrustDecay</title>
+  <title>TrustDecay — Stale Trust Containment</title>
+  <meta name="description" content="Real-time simulation of stale-trust containment and convergence across distributed nodes.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>TrustDecay</h1>
-    <p>Failure-Resilient Trust Revocation Demonstration</p>
+
+  <!-- Header -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="brand-mark"></div>
+        <div>
+          <h1 class="brand-title">TrustDecay</h1>
+          <p class="brand-sub">Stale-trust containment &amp; convergence</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="status-pill" id="health-pill">
+          <span class="pulse-dot"></span>
+          <span id="health-text">Connecting…</span>
+        </div>
+        <button class="btn-ghost" id="btn-reset">↺ Reset Demo</button>
+      </div>
+    </div>
   </header>
-  <main id="app">
-    <div id="status">Loading...</div>
+
+  <main class="layout">
+
+    <!-- ── Left: Graph + Node cards ── -->
+    <div class="panel-left">
+
+      <div class="panel-section">
+        <div class="section-header">
+          <span class="section-label">Trust Graph</span>
+          <span class="section-badge" id="epoch-badge">epoch —</span>
+        </div>
+        <div class="graph-wrap">
+          <canvas id="graph-canvas"></canvas>
+          <div id="graph-tooltip" class="graph-tooltip hidden"></div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="section-header">
+          <span class="section-label">Nodes</span>
+          <span class="section-hint">click a node to inspect</span>
+        </div>
+        <div class="node-grid" id="node-grid"></div>
+      </div>
+
+    </div>
+
+    <!-- ── Right: Tabbed panel ── -->
+    <div class="panel-right">
+
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tab-ops"         data-tab="pane-ops">Operations</button>
+        <button class="tab-btn"        id="tab-convergence" data-tab="pane-convergence">Convergence</button>
+        <button class="tab-btn"        id="tab-events"      data-tab="pane-events">Event Log <span id="event-count-badge"></span></button>
+      </div>
+
+      <!-- Operations tab -->
+      <div class="tab-pane active" id="pane-ops">
+        <div class="ops-list">
+
+          <div class="op-card">
+            <div class="op-icon">↯</div>
+            <div class="op-body">
+              <div class="op-title">Revoke Trust</div>
+              <div class="op-desc">Revoke a relationship — bumps the global epoch and push-blocks all reachable online nodes.</div>
+              <div class="op-controls">
+                <select id="revoke-rel" class="field-select">
+                  <option value="">Select relationship…</option>
+                </select>
+                <button class="btn-action btn-danger" id="btn-revoke">Revoke</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="op-card">
+            <div class="op-icon">⊘</div>
+            <div class="op-body">
+              <div class="op-title">Disconnect Node</div>
+              <div class="op-desc">Mark a node OFFLINE. Its local trust cache is frozen and untouched until reconnect.</div>
+              <div class="op-controls">
+                <select id="disconnect-node" class="field-select">
+                  <option value="">Select node…</option>
+                </select>
+                <button class="btn-action btn-warn" id="btn-disconnect">Disconnect</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="op-card">
+            <div class="op-icon">⟳</div>
+            <div class="op-body">
+              <div class="op-title">Reconnect Node</div>
+              <div class="op-desc">Transition OFFLINE → RECONCILING → READY. Node pulls authority state (fail-closed).</div>
+              <div class="op-controls">
+                <select id="reconnect-node" class="field-select">
+                  <option value="">Select node…</option>
+                </select>
+                <button class="btn-action btn-ok" id="btn-reconnect">Reconnect</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="op-card">
+            <div class="op-icon">→</div>
+            <div class="op-body">
+              <div class="op-title">Authorization Check</div>
+              <div class="op-desc">Ask a node whether it would ALLOW or DENY an authorization request for a given relationship.</div>
+              <div class="op-controls-row">
+                <select id="auth-node" class="field-select flex-1">
+                  <option value="">Node…</option>
+                </select>
+                <select id="auth-rel" class="field-select flex-1">
+                  <option value="">Relationship…</option>
+                </select>
+                <button class="btn-action btn-ok" id="btn-authorize">Check</button>
+              </div>
+              <div id="auth-result" class="auth-result hidden"></div>
+            </div>
+          </div>
+
+          <div class="op-card">
+            <div class="op-icon">⇉</div>
+            <div class="op-body">
+              <div class="op-title">Propagate Trust (Downstream)</div>
+              <div class="op-desc">A node shares its cached trust to another node, creating an indirect propagation edge. This is how stale trust spreads.</div>
+              <div class="op-controls-row">
+                <select id="prop-from" class="field-select flex-1">
+                  <option value="">From node…</option>
+                </select>
+                <select id="prop-rel" class="field-select flex-1">
+                  <option value="">Relationship…</option>
+                </select>
+                <select id="prop-to" class="field-select flex-1">
+                  <option value="">To node…</option>
+                </select>
+                <button class="btn-action btn-ok" id="btn-propagate">Propagate</button>
+              </div>
+              <div id="prop-result" class="auth-result hidden"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Convergence tab -->
+      <div class="tab-pane" id="pane-convergence">
+        <div class="convergence-wrap">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+            <span class="section-label">Compare relationship</span>
+            <select id="convergence-rel" class="mini-select">
+              <option value="">Latest revoked</option>
+            </select>
+          </div>
+          <div id="convergence-body">
+            <div class="empty-state">No data yet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Events tab -->
+      <div class="tab-pane" id="pane-events">
+        <div class="events-wrap">
+          <div class="events-toolbar">
+            <span class="events-toolbar-label" id="event-count">0 events</span>
+          </div>
+          <div class="events-list" id="event-log">
+            <div class="empty-state">Waiting for events…</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
   </main>
+
+  <!-- Node drawer -->
+  <div class="drawer-overlay hidden" id="drawer-overlay"></div>
+  <aside class="node-drawer hidden" id="node-drawer">
+    <div class="drawer-header">
+      <div>
+        <div class="drawer-label">Node Detail</div>
+        <div class="drawer-title" id="drawer-node-id">—</div>
+      </div>
+      <button class="drawer-close" id="drawer-close">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="toast-stack" id="toast-stack"></div>
+
   <script src="app.js"></script>
 </body>
 </html>
